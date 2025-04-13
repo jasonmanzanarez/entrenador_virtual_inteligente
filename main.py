@@ -5,13 +5,16 @@ import pyttsx3
 import threading
 import random
 import time
+import sounddevice as sd
+import soundfile as sf
 import speech_recognition as sr
+import tempfile
+import os
 
 # === Inicializar voz ===
 voz = pyttsx3.init()
 voz.setProperty('rate', 150)
 ultimo_mensaje = ""
-
 
 def hablar(mensaje):
     global ultimo_mensaje
@@ -19,27 +22,38 @@ def hablar(mensaje):
         ultimo_mensaje = mensaje
         threading.Thread(target=_decir, args=(mensaje,), daemon=True).start()
 
-
 def _decir(mensaje):
     voz.say(mensaje)
     voz.runAndWait()
 
-
-# === Escuchar comando de voz ===
+# === Escuchar comando de voz (sin PyAudio) ===
 def escuchar_comando():
-    r = sr.Recognizer()
-    with sr.Microphone(device_index=1) as source:
-        print("🎙️ Micrófono activo... habla ahora")
-        r.adjust_for_ambient_noise(source, duration=1)
-        audio = r.listen(source)
-        try:
-            texto = r.recognize_google(audio, language="es-MX").lower()
-            print(f"🧠 Se escuchó: {texto}")
-            return texto
-        except:
-            print("⚠️ No se entendió el audio")
-            return ""
+    fs = 44100  # Sample rate
+    seconds = 4  # Recording duration
 
+    print("🎙️ Grabando... habla ahora")
+    audio = sd.rec(int(seconds * fs), samplerate=fs, channels=1, dtype='int16')
+    sd.wait()
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+        sf.write(f.name, audio, fs)
+        audio_path = f.name
+
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(audio_path) as source:
+        audio_data = recognizer.record(source)
+    os.unlink(audio_path)
+
+    try:
+        texto = recognizer.recognize_google(audio_data, language="es-MX").lower()
+        print(f"🧠 Se escuchó: {texto}")
+        return texto
+    except sr.UnknownValueError:
+        print("⚠️ No se entendió el audio")
+        return ""
+    except sr.RequestError:
+        print("🚫 Error con el servicio de reconocimiento")
+        return ""
 
 # === Rutinas disponibles ===
 rutinas = {
@@ -62,7 +76,6 @@ def calcular_angulo(a, b, c):
     coseno = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
     angulo = np.arccos(coseno)
     return np.degrees(angulo)
-
 
 # === Lógica de entrenamiento ===
 def iniciar_entrenamiento(rutina_actual):
@@ -131,7 +144,6 @@ def iniciar_entrenamiento(rutina_actual):
                         hablar(f"🟢 Siguiente ejercicio: {meta} {ejercicio}s")
                         time.sleep(2)
 
-            # Mostrar en pantalla
             cv2.putText(imagen, f"Ejercicio: {ejercicio.upper()} ({repeticiones}/{meta})",
                         (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
@@ -146,7 +158,6 @@ def iniciar_entrenamiento(rutina_actual):
 
     cam.release()
     cv2.destroyAllWindows()
-
 
 # === MAIN ===
 if __name__ == "__main__":
