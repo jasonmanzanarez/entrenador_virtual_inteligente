@@ -10,27 +10,43 @@ import soundfile as sf
 import speech_recognition as sr
 import tempfile
 import os
+import csv
+from datetime import datetime
+from pyswip import Prolog
+
+# === Inicializar Prolog ===
+prolog = Prolog()
+prolog.consult("entrenador_conocimiento.pl")
+
+def angulo_valido(ejercicio, angulo):
+    try:
+        resultado = list(prolog.query(f"angulo_valido_para_{ejercicio}({int(angulo)})"))
+        return len(resultado) > 0
+    except Exception as e:
+        print(f"❌ Error al consultar Prolog: {e}")
+        return False
 
 # === Inicializar voz ===
 voz = pyttsx3.init()
 voz.setProperty('rate', 150)
 ultimo_mensaje = ""
+voz_lock = threading.Lock()
 
 def hablar(mensaje):
     global ultimo_mensaje
     if mensaje != ultimo_mensaje:
         ultimo_mensaje = mensaje
-        threading.Thread(target=_decir, args=(mensaje,), daemon=True).start()
+        threading.Thread(target=_decir_bloqueado, args=(mensaje,), daemon=True).start()
 
-def _decir(mensaje):
-    voz.say(mensaje)
-    voz.runAndWait()
+def _decir_bloqueado(mensaje):
+    with voz_lock:
+        voz.say(mensaje)
+        voz.runAndWait()
 
 # === Escuchar comando de voz (sin PyAudio) ===
 def escuchar_comando():
-    fs = 44100  # Sample rate
-    seconds = 4  # Recording duration
-
+    fs = 44100
+    seconds = 4
     print("🎙️ Grabando... habla ahora")
     audio = sd.rec(int(seconds * fs), samplerate=fs, channels=1, dtype='int16')
     sd.wait()
@@ -55,18 +71,32 @@ def escuchar_comando():
         print("🚫 Error con el servicio de reconocimiento")
         return ""
 
-# === Rutinas disponibles ===
-rutinas = {
-    "corta": [("sentadilla", 3), ("lagartija", 3)],
-    "media": [("sentadilla", 5), ("lagartija", 5)],
-    "larga": [("sentadilla", 8), ("lagartija", 8)]
-}
+def obtener_nombre_usuario():
+    hablar("Por favor, di tu nombre")
+    nombre = escuchar_comando()
+    if not nombre:
+        nombre = input("No se entendió el nombre. Escríbelo manualmente: ")
+    print(f"📌 Usuario identificado: {nombre}")
+    return nombre
 
 # === Frases motivadoras ===
 frases_correctas = [
     "¡Buena repetición!", "¡Eso estuvo perfecto!", "¡Muy bien hecho!",
     "¡Excelente ejecución!", "¡Gran esfuerzo!", "¡Correcto, sigue así!"
 ]
+
+# === Guardar registro CSV ===
+def guardar_registro(usuario, repeticiones_totales, duracion_segundos):
+    nombre_archivo = "registro.csv"
+    encabezado = ["Usuario", "Fecha", "Repeticiones", "Duración (s)"]
+    fila = [usuario, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), repeticiones_totales, round(duracion_segundos, 2)]
+
+    archivo_existe = os.path.isfile(nombre_archivo)
+    with open(nombre_archivo, "a", newline="") as archivo:
+        escritor = csv.writer(archivo)
+        if not archivo_existe:
+            escritor.writerow(encabezado)
+        escritor.writerow(fila)
 
 # === Cálculo de ángulo ===
 def calcular_angulo(a, b, c):
@@ -77,13 +107,12 @@ def calcular_angulo(a, b, c):
     angulo = np.arccos(coseno)
     return np.degrees(angulo)
 
-# === Lógica de entrenamiento ===
-def iniciar_entrenamiento(rutina_actual):
+# === Lógica de entrenamiento solo para sentadillas ===
+def iniciar_sentadillas(usuario):
     repeticiones = 0
     estado = "arriba"
-    actual = 0
-    ejercicio, meta = rutina_actual[actual]
-    hablar(f"Vamos a comenzar con {meta} {ejercicio}s")
+    tiempo_inicio = time.time()
+    hablar("Vamos a comenzar con tus sentadillas")
 
     cam = cv2.VideoCapture(0)
     with mp.solutions.pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
@@ -97,6 +126,7 @@ def iniciar_entrenamiento(rutina_actual):
             resultados = pose.process(imagen_rgb)
 
             if resultados.pose_landmarks:
+                # Dibuja puntos y conexiones del cuerpo
                 mp.solutions.drawing_utils.draw_landmarks(
                     imagen,
                     resultados.pose_landmarks,
@@ -106,66 +136,33 @@ def iniciar_entrenamiento(rutina_actual):
                 )
 
                 puntos = resultados.pose_landmarks.landmark
-                hombro = [puntos[11].x, puntos[11].y]
                 cadera = [puntos[23].x, puntos[23].y]
                 rodilla = [puntos[25].x, puntos[25].y]
                 tobillo = [puntos[27].x, puntos[27].y]
-                codo = [puntos[14].x, puntos[14].y]
-                muñeca = [puntos[16].x, puntos[16].y]
 
-                if ejercicio == "sentadilla":
-                    angulo = calcular_angulo(cadera, rodilla, tobillo)
-                    if angulo < 80 and estado == "arriba":
-                        estado = "abajo"
-                    elif angulo > 100 and estado == "abajo":
-                        estado = "arriba"
-                        repeticiones += 1
-                        hablar(random.choice(frases_correctas))
+                angulo = calcular_angulo(cadera, rodilla, tobillo)
+                if not angulo_valido("sentadilla", angulo) and estado == "arriba":
+                    estado = "abajo"
+                elif angulo_valido("sentadilla", angulo) and estado == "abajo":
+                    estado = "arriba"
+                    repeticiones += 1
+                    hablar(random.choice(frases_correctas))
 
-                elif ejercicio == "lagartija":
-                    angulo = calcular_angulo(hombro, codo, muñeca)
-                    if angulo < 70 and estado == "arriba":
-                        estado = "abajo"
-                    elif angulo > 150 and estado == "abajo":
-                        estado = "arriba"
-                        repeticiones += 1
-                        hablar(random.choice(frases_correctas))
+                cv2.putText(imagen, f"Sentadillas: {repeticiones}",
+                            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
-                if repeticiones >= meta:
-                    hablar(f"¡Completaste {meta} {ejercicio}s!")
-                    actual += 1
-                    repeticiones = 0
-
-                    if actual >= len(rutina_actual):
-                        hablar("🏁 ¡Rutina completada! Excelente trabajo.")
-                        break
-                    else:
-                        ejercicio, meta = rutina_actual[actual]
-                        hablar(f"🟢 Siguiente ejercicio: {meta} {ejercicio}s")
-                        time.sleep(2)
-
-            cv2.putText(imagen, f"Ejercicio: {ejercicio.upper()} ({repeticiones}/{meta})",
-                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-
-            if actual + 1 < len(rutina_actual):
-                siguiente = rutina_actual[actual + 1]
-                cv2.putText(imagen, f"Siguiente: {siguiente[0].capitalize()} x{siguiente[1]}",
-                            (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-
-            cv2.imshow("Entrenador Virtual AI", imagen)
+            cv2.imshow("Entrenador Virtual - Sentadillas", imagen)
             if cv2.waitKey(10) & 0xFF == 27:
                 break
 
     cam.release()
     cv2.destroyAllWindows()
+    duracion_total = time.time() - tiempo_inicio
+    guardar_registro(usuario, repeticiones, duracion_total)
 
 # === MAIN ===
 if __name__ == "__main__":
-    hablar("Di qué rutina quieres hacer: corta, media o larga")
-    seleccion = ""
-    while seleccion not in rutinas:
-        seleccion = escuchar_comando()
-        if seleccion not in rutinas:
-            hablar("No entendí. Repite: corta, media o larga.")
-    rutina = rutinas[seleccion]
-    iniciar_entrenamiento(rutina)
+    usuario = obtener_nombre_usuario()
+    hablar("Cuando estés listo, presiona una tecla para comenzar")
+    input("Presiona ENTER para iniciar...")
+    iniciar_sentadillas(usuario)
