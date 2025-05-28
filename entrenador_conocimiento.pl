@@ -10,6 +10,12 @@ usuario(alicia).
 usuario(luis).
 usuario(kevin).
 
+postura_valida(kevin).
+postura_valida(jason).
+
+salud_apropiada(kevin).
+salud_apropiada(jason).
+
 % === Ejercicio único ===
 ejercicio(sentadilla).
 
@@ -44,6 +50,17 @@ retroalimentacion_correcta("¡Sigue así!").
 retroalimentacion_correcta("¡Perfecto movimiento!").
 retroalimentacion_correcta("¡Muy buen ritmo!").
 
+% === Retroalimentación visual negativa ===
+retroalimentacion_incorrecta("Tu postura no es correcta. Observa el ejemplo para corregirla.").
+
+% === Actuadores disponibles ===
+actuador(voz).
+actuador(digital).
+actuador(gif_correctivo).  % Actuador nuevo para mostrar imagen o video de corrección
+
+% === Recursos visuales ===
+recurso_visual(sentadilla, "sentadilla_correcta.gif").
+
 % === Reglas ===
 
 % R1: Validar si el ángulo de sentadilla es correcto
@@ -58,15 +75,19 @@ retroalimentar(sentadilla, Angulo, Mensaje) :-
     angulo_valido_para_sentadilla(Angulo),
     retroalimentacion_correcta(Mensaje).
 
-% R3: Determinar si un usuario es entrenable (simple)
+% R3: Determinar si un usuario es entrenable
 usuario_entrenable(U) :-
-    usuario(U).
+    usuario(U),
+    postura_valida(U),
+    salud_apropiada(U).
 
-% R4: Validar posición permitida
-posicion_valida(Pos) :-
-    posicion(Pos).
-
-% R5: Recomendación según nivel
+% R4: Recomendación según nivel del usuario
 recomendar_repeticiones(principiante, 3).
 recomendar_repeticiones(intermedio, 5).
 recomendar_repeticiones(avanzado, 8).
+
+% R5: Retroalimentación visual cuando el ángulo es incorrecto
+retroalimentar_visual(sentadilla, Angulo, Mensaje, Recurso) :-
+    \+ angulo_valido_para_sentadilla(Angulo),
+    retroalimentacion_incorrecta(Mensaje),
+    recurso_visual(sentadilla, Recurso).
